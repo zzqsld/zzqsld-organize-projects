@@ -4,4 +4,3 @@ docutils
 docx2pdf
 pypdf
 pypinyin
-```
