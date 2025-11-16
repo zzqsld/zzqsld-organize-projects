@@ -1,0 +1,18 @@
+[tool]
+name = "organize-projects"
+version = "0.1.0"
+description = "A Python tool for identifying and processing project folders, including file conversion and merging functionalities."
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.6"
+
+[tool.poetry.dependencies]
+python = "^3.6"
+docx2pdf = "^0.1.6"
+pypdf = "^2.0.0"
+pypinyin = "^0.48.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

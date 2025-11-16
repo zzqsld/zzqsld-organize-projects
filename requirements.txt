@@ -1,0 +1,7 @@
+docutils
+# requirements.txt
+
+docx2pdf
+pypdf
+pypinyin
+```

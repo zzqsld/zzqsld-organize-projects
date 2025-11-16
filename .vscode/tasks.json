@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run organize_projects",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/src/organize_projects/organize_projects.py",
+                "--root",
+                "${workspaceFolder}/<项目根目录>"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$python"],
+            "detail": "运行 organize_projects.py 脚本以处理项目文件夹"
+        },
+        {
+            "label": "Run tests",
+            "type": "shell",
+            "command": "pytest",
+            "args": [
+                "${workspaceFolder}/tests"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": ["$pytest"],
+            "detail": "运行项目的测试用例"
+        }
+    ]
+}
