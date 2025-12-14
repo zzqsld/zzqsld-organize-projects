@@ -105,6 +105,39 @@ def convert_docx_to_pdf(docx_path: Path, out_pdf_path: Path, dry_run: bool = Fal
         if generated.exists():
             if generated.resolve() != out_pdf_path.resolve():
                 shutil.move(str(generated), str(out_pdf_path))
+            # 尝试检测生成的 PDF 是否包含中文文本（避免 LibreOffice 在缺少中文字体时产生乱码）
+            if _HAS_PYPDF:
+                try:
+                    from pypdf import PdfReader
+                    def pdf_contains_chinese(p: Path) -> bool:
+                        try:
+                            reader = PdfReader(str(p))
+                            for page in reader.pages:
+                                text = page.extract_text() or ""
+                                if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+                                    return True
+                        except Exception:
+                            return False
+                        return False
+
+                    if not pdf_contains_chinese(out_pdf_path):
+                        print("[WARN] 生成的 PDF 可能不包含中文（可能为乱码），尝试使用带中文环境的 LibreOffice 重试...")
+                        env = dict(**subprocess.os.environ)
+                        env.update({"LANG": "zh_CN.UTF-8", "LC_ALL": "zh_CN.UTF-8"})
+                        try:
+                            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+                            if generated.exists():
+                                if generated.resolve() != out_pdf_path.resolve():
+                                    shutil.move(str(generated), str(out_pdf_path))
+                        except Exception:
+                            pass
+                        # 再次检测
+                        if not pdf_contains_chinese(out_pdf_path):
+                            print("[ERROR] PDF 转换后仍无法检测到中文文本。请在运行环境安装中文字体（例如 ttf-wqy-zenhei / fonts-noto-cjk）。")
+                            return False
+                except Exception:
+                    # 若检查过程出错，仍返回存在性作为结果
+                    return out_pdf_path.exists()
             return out_pdf_path.exists()
         else:
             print(f"[ERROR] LibreOffice 未生成预期 PDF: {generated}")
