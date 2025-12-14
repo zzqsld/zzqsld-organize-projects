@@ -3,6 +3,10 @@ name: Process Projects
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Environment name that holds WebDAV secrets"
+        required: false
+        default: "webdav"
       delete_source:
         description: "Delete original zip on WebDAV after upload of processed result"
         required: false
@@ -10,6 +14,7 @@ on:
 
 jobs:
   process:
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
