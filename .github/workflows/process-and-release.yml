@@ -3,14 +3,10 @@ name: Process Projects
 on:
   workflow_dispatch:
     inputs:
-      archive_path:
-        description: 'Relative path to the project zip inside the repo (e.g. uploads/input.zip)'
-        required: true
-        default: 'input.zip'
-      release_tag:
-        description: 'Release tag to create (defaults to auto run-based tag)'
-        required: true
-        default: 'auto-${{ github.run_number }}'
+      delete_source:
+        description: "Delete original zip on WebDAV after upload of processed result"
+        required: false
+        default: "false"
 
 jobs:
   process:
@@ -32,7 +28,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install Python dependencies
         run: |
@@ -44,15 +40,13 @@ jobs:
 
       - name: Run organizer
         run: |
-          zip_name="${{ steps.setdate.outputs.date }}项目.zip"
-          python organize_projects.py --archive "${{ inputs.archive_path }}" --output-zip "dist/$zip_name"
+          DELETE_FLAG=""
+          if [ "${{ inputs.delete_source }}" = "true" ]; then
+            DELETE_FLAG="--webdav-delete-source"
+          fi
+          python organize_projects.py \
+            --webdav-url "${{ secrets.WEBDAV_URL }}" \
+            --webdav-username "${{ secrets.WEBDAV_USERNAME }}" \
+            --webdav-password "${{ secrets.WEBDAV_PASSWORD }}" \
+            $DELETE_FLAG
         shell: bash
-
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.release_tag }}
-          name: Automated processing ${{ inputs.release_tag }}
-          files: dist/*项目.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

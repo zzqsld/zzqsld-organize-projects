@@ -1,6 +1,6 @@
 # 项目整理与发布
 
-该项目提供一个脚本用于批量整理“项目文件夹”，并支持在本地或通过 GitHub Actions 生成压缩包发布。
+该项目提供一个脚本用于批量整理“项目文件夹”，支持本地处理，也支持直接从 WebDAV 目录批量拉取 zip 处理后回传（适合大于 GitHub 25MB 限制的文件）。
 
 ## 关键行为（与旧版差异）
 - 识别“项目根”：只要目录下存在名为 `12` 的子文件夹，即视为项目根。
@@ -18,6 +18,21 @@
   - 扫描目录：`python organize_projects.py --root D:/path/to/projects`
   - 处理压缩包：`python organize_projects.py --archive D:/path/to/input.zip --output-zip D:/path/to/dist/output.zip`
 
+## WebDAV 自动处理（本地或 GitHub Actions）
+- 场景：GitHub 不能上传超过 25MB 的大压缩包时，可把 zip 放到支持 WebDAV 的网盘目录。
+- 运行示例：
+  - `python organize_projects.py --webdav-url https://example.com/dav/projects/ --webdav-username your_user --webdav-password your_pass`
+  - 可选：`--webdav-delete-source` 上传处理结果后删除远端原压缩包（默认保留）。
+- 行为：
+  - 脚本会列出该目录下的所有 `.zip`，忽略文件名包含 `_已处理` 的压缩包。
+  - 逐个下载 -> 解压 -> 按规则生成输出 -> 将生成结果再压缩为 `<原名>_已处理.zip` 上传回 WebDAV。
+  - `--dry-run` 仍会列出计划操作，但不会下载/上传/写盘。
+
+### 在 GitHub Actions 中跑 WebDAV
+- 设置仓库 Secrets：`WEBDAV_URL`（目录 URL，末尾带 `/`）、`WEBDAV_USERNAME`、`WEBDAV_PASSWORD`。
+- 手动触发 `Process Projects` workflow（仓库自带），可选输入：`delete_source`（true/false，默认 false）。
+- workflow 会调用脚本的 WebDAV 模式：批量拉取 `.zip`，生成 `<原名>_已处理.zip` 并回传 WebDAV，忽略已带 `_已处理` 的压缩包，不再依赖把 zip 提交到仓库或发布 Release。
+
 ## 常用参数
 - `--archive`：提供 zip 压缩包路径，脚本会自动解压并用解压后的目录作为 root。
 - `--root`：直接指定根目录（未压缩时使用）。
@@ -26,13 +41,5 @@
 - `--no-recursive`：只检查第一层子目录。
 - `--non-strict`：非严格模式（尽量处理）。
 
-## GitHub Actions（可选）
-如需在 CI 中批量处理并发布：
-- 将项目文件夹压缩为 zip（例如 `uploads/input.zip`）并推送到仓库（路径相对仓库根，推荐放在已建的 `uploads/` 目录，仓库里有 `.gitkeep` 占位）。
-- 在 Actions 标签页触发 workflow，参数：
-  - `archive_path`：压缩包相对路径，如 `input.zip` 或 `uploads/input.zip`。
-  - `release_tag`：生成 Release 的标签，如 `auto-${{ github.run_number }}`。
-- workflow 将安装 LibreOffice 与依赖，执行脚本，并把每个项目根下的 `1` 目录内容按“项目根目录名”为顶层打包为 `dist/YYYY-MM-DD项目.zip`，并发布到 Release。
-
-## Release 内容
-- `YYYY-MM-DD项目.zip`：包含每个项目根目录名作为顶层文件夹，其下为该项目 `1` 目录的所有生成 PDF（已做重复去重）。
+## Release 内容（本地或自建流程）
+- 你可以继续使用 `--output-zip` 本地生成 `YYYY-MM-DD项目.zip`，结构与原流程一致：顶层为“项目根目录名”，内容为生成的 `1` 目录。若使用 WebDAV 模式，会为每个输入包单独生成 `<原名>_已处理.zip`（Actions 版直接回传 WebDAV，不再发 Release）。

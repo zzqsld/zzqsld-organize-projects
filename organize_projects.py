@@ -19,7 +19,11 @@ import subprocess
 import hashlib
 import zipfile
 import tempfile
-from typing import List, Set, Dict
+from typing import List, Set, Dict, Optional
+import xml.etree.ElementTree as ET
+from urllib.parse import urljoin, quote, unquote
+
+import requests
 
 # optional imports
 try:
@@ -43,6 +47,7 @@ except Exception:
 
 REQUIRED_SUBDIR = "12"
 KAIPING_DIR_NAME = "开评标资料"  # look under 12\开评标资料 for 1..12
+PROCESSED_SUFFIX = "_已处理"
 
 MOVE_FILES_TO_OUTPUT = ["1.pdf", "6.pdf", "8.pdf"]
 DOCX_TO_PDF = {"7.docx": "4.pdf"}  # convert 7.docx -> 4.pdf (rename)
@@ -261,6 +266,110 @@ def zip_outputs(outputs: List[Path], zip_path: Path, dry_run: bool = False):
                     arcname = f"{proj_label}/{file_path.relative_to(out_dir)}"
                     zf.write(file_path, arcname)
     print(f"[OK] 已生成压缩包: {zip_path}")
+
+
+# ----------------- WebDAV 支持 -----------------
+
+
+def _ensure_trailing_slash(url: str) -> str:
+    return url if url.endswith("/") else url + "/"
+
+
+class WebDAVClient:
+    def __init__(self, base_url: str, username: Optional[str] = None, password: Optional[str] = None):
+        self.base_url = _ensure_trailing_slash(base_url)
+        self.auth = (username, password) if username or password else None
+
+    def _build_url(self, remote_name: str) -> str:
+        quoted = quote(remote_name)
+        return urljoin(self.base_url, quoted)
+
+    def list_archives(self, processed_suffix: str = PROCESSED_SUFFIX) -> List[str]:
+        """列出 base_url 下的 zip 文件，过滤掉已处理标记。"""
+        headers = {"Depth": "1", "Content-Type": "application/xml"}
+        body = """<?xml version='1.0' encoding='utf-8'?>
+<d:propfind xmlns:d='DAV:'>
+  <d:allprop/>
+</d:propfind>"""
+        try:
+            resp = requests.request("PROPFIND", self.base_url, data=body, headers=headers, auth=self.auth)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"[ERROR] WebDAV 列表请求失败: {e}")
+            return []
+
+        try:
+            root = ET.fromstring(resp.content)
+        except Exception as e:
+            print(f"[ERROR] 解析 WebDAV 列表响应失败: {e}")
+            return []
+
+        archives: List[str] = []
+        for resp_el in root.findall(".//{DAV:}response"):
+            href_el = resp_el.find("{DAV:}href")
+            if href_el is None or not href_el.text:
+                continue
+            name = href_el.text
+            name = name.rstrip("/")
+            if not name:
+                continue
+            parts = name.split("/")
+            if not parts:
+                continue
+            fname = unquote(parts[-1])
+            if not fname or fname.endswith("/"):
+                continue
+            if fname.lower().endswith(".zip") and processed_suffix not in Path(fname).stem:
+                archives.append(fname)
+        return archives
+
+    def download_file(self, remote_name: str, local_path: Path, dry_run: bool = False) -> bool:
+        url = self._build_url(remote_name)
+        if dry_run:
+            print(f"[DRY] WebDAV 下载: {url} -> {local_path}")
+            return True
+        try:
+            with requests.get(url, auth=self.auth, stream=True) as r:
+                r.raise_for_status()
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(local_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+            print(f"[OK] 已从 WebDAV 下载: {remote_name}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] 下载失败 {remote_name}: {e}")
+            return False
+
+    def upload_file(self, local_path: Path, remote_name: str, dry_run: bool = False) -> bool:
+        url = self._build_url(remote_name)
+        if dry_run:
+            print(f"[DRY] WebDAV 上传: {local_path} -> {url}")
+            return True
+        try:
+            with open(local_path, "rb") as f:
+                resp = requests.put(url, data=f, auth=self.auth)
+            resp.raise_for_status()
+            print(f"[OK] 已上传到 WebDAV: {remote_name}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] 上传失败 {remote_name}: {e}")
+            return False
+
+    def delete_file(self, remote_name: str, dry_run: bool = False) -> bool:
+        url = self._build_url(remote_name)
+        if dry_run:
+            print(f"[DRY] WebDAV 删除: {url}")
+            return True
+        try:
+            resp = requests.request("DELETE", url, auth=self.auth)
+            resp.raise_for_status()
+            print(f"[OK] 已删除 WebDAV 文件: {remote_name}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] 删除失败 {remote_name}: {e}")
+            return False
 
 
 # ----------------- 拼音排序相关 -----------------
@@ -643,6 +752,51 @@ def find_and_process(root: Path, dry_run: bool = False, recursive: bool = True, 
     return project_outputs
 
 
+def process_webdav_archives(
+    webdav_url: str,
+    username: Optional[str],
+    password: Optional[str],
+    delete_source: bool = False,
+    dry_run: bool = False,
+    recursive: bool = True,
+    strict: bool = True,
+):
+    """拉取 WebDAV 目录下的 zip，批量处理并回传。"""
+    client = WebDAVClient(webdav_url, username, password)
+    archives = client.list_archives(processed_suffix=PROCESSED_SUFFIX)
+    if not archives:
+        print("[INFO] WebDAV 目录下未找到待处理的 zip（或仅有已处理标记）。")
+        return
+
+    print(f"[INFO] WebDAV 待处理压缩包: {archives}")
+    for remote_name in archives:
+        print(f"\n==== 处理远端压缩包: {remote_name} ====")
+        with tempfile.TemporaryDirectory() as td:
+            tmpdir = Path(td)
+            local_archive = tmpdir / Path(remote_name).name
+            ok = client.download_file(remote_name, local_archive, dry_run=dry_run)
+            if not ok:
+                continue
+
+            if dry_run:
+                print("[DRY] 跳过解压和处理，仅展示将执行的操作。")
+                continue
+
+            extracted_root = extract_archive(local_archive, tmpdir / "extracted")
+            outputs = find_and_process(extracted_root, dry_run=dry_run, recursive=recursive, strict=strict)
+
+            output_dirs = [pair[1] for pair in outputs if pair and len(pair) == 2]
+            processed_name = f"{Path(remote_name).stem}{PROCESSED_SUFFIX}.zip"
+            processed_local = tmpdir / processed_name
+            zip_outputs(output_dirs, processed_local, dry_run=dry_run)
+
+            if processed_local.exists():
+                client.upload_file(processed_local, processed_name, dry_run=dry_run)
+
+            if delete_source:
+                client.delete_file(remote_name, dry_run=dry_run)
+
+
 # ----------------- CLI -----------------
 
 
@@ -654,10 +808,31 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="预览操作，不写入磁盘")
     parser.add_argument("--no-recursive", dest="recursive", action="store_false", help="只检查 root 的第一层子目录")
     parser.add_argument("--non-strict", dest="strict", action="store_false", help="非严格模式（尽量处理）")
+    parser.add_argument("--webdav-url", help="WebDAV 目录 URL（指向存放压缩包的目录，需以 / 结尾或为目录路径）")
+    parser.add_argument("--webdav-username", help="WebDAV 用户名")
+    parser.add_argument("--webdav-password", help="WebDAV 密码")
+    parser.add_argument("--webdav-delete-source", action="store_true", help="上传处理结果后删除远端原始压缩包")
     args = parser.parse_args()
 
-    if not args.root and not args.archive:
-        parser.error("必须指定 --root 或 --archive 之一。")
+    if not args.root and not args.archive and not args.webdav_url:
+        parser.error("必须指定 --root、--archive 或 --webdav-url 之一。")
+    if (args.root or args.archive) and args.webdav_url:
+        print("[INFO] 同时指定了本地/压缩包与 WebDAV，将优先处理 WebDAV。")
+
+    if args.webdav_url:
+        if args.output_zip:
+            print("[WARN] WebDAV 模式会为每个压缩包自动生成并上传 <原名>_已处理.zip，本地 --output-zip 将被忽略。")
+        process_webdav_archives(
+            webdav_url=args.webdav_url,
+            username=args.webdav_username,
+            password=args.webdav_password,
+            delete_source=args.webdav_delete_source,
+            dry_run=args.dry_run,
+            recursive=args.recursive,
+            strict=args.strict,
+        )
+        return
+
     if args.root and args.archive:
         print("[INFO] 同时指定了 --root 和 --archive，将优先使用 --archive 解压后的目录作为 root。")
 
