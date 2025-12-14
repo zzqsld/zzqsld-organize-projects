@@ -27,8 +27,10 @@ jobs:
         id: setdate
         run: echo "date=$(date +%F)" >> $GITHUB_OUTPUT
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libreoffice
+      - name: Install system dependencies (LibreOffice + CJK fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice fonts-noto-cjk fonts-wqy-zenhei
 
       - name: Set up Python
         uses: actions/setup-python@v5
