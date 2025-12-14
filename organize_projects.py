@@ -232,18 +232,59 @@ def remove_duplicate_files(output_dir: Path, dry_run: bool = False):
         print("[INFO] 未发现重复文件")
 
 
+def _decode_zip_filename(info: zipfile.ZipInfo, extra_encodings: Optional[List[str]] = None) -> str:
+    """尝试修正 zip 内部的文件名编码，处理常见的 GBK 乱码情况。"""
+    extra = extra_encodings or ["gbk", "cp936", "utf-8"]
+    # UTF-8 flag set -> 直接使用
+    if info.flag_bits & 0x800:
+        return info.filename
+
+    raw_bytes = info.filename.encode("cp437", errors="replace")
+    for enc in extra:
+        try:
+            return raw_bytes.decode(enc)
+        except Exception:
+            continue
+    return info.filename
+
+
 def extract_archive(archive_path: Path, dest_dir: Path) -> Path:
     """解压 zip 压缩包到 dest_dir 并返回作为 root 的目录。"""
     if not archive_path.exists() or not archive_path.is_file():
         raise FileNotFoundError(f"压缩包不存在: {archive_path}")
     dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_root = dest_dir.resolve()
+
     with zipfile.ZipFile(archive_path, "r") as zf:
-        zf.extractall(dest_dir)
+        for info in zf.infolist():
+            decoded_name = _decode_zip_filename(info)
+            target_path = dest_root / Path(decoded_name)
+            try:
+                target_resolved = target_path.resolve()
+            except Exception:
+                print(f"[WARN] 跳过无法解析的压缩条目: {decoded_name}")
+                continue
+
+            # 防御性检查，避免路径穿越
+            try:
+                target_resolved.relative_to(dest_root)
+            except Exception:
+                print(f"[WARN] 检测到潜在的路径穿越，已跳过: {decoded_name}")
+                continue
+
+            if info.is_dir():
+                target_resolved.mkdir(parents=True, exist_ok=True)
+                continue
+
+            target_resolved.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, open(target_resolved, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+
     # 若解压后只有一个顶层目录，则返回该目录；否则返回 dest_dir 本身
-    top_level_dirs = [p for p in dest_dir.iterdir() if p.is_dir()]
+    top_level_dirs = [p for p in dest_root.iterdir() if p.is_dir()]
     if len(top_level_dirs) == 1:
         return top_level_dirs[0]
-    return dest_dir
+    return dest_root
 
 
 def zip_outputs(outputs: List[Path], zip_path: Path, dry_run: bool = False):
