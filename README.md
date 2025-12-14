@@ -28,7 +28,7 @@
 
 ## GitHub Actions（可选）
 如需在 CI 中批量处理并发布：
-- 将项目文件夹压缩为 zip（例如 `input.zip`）并推送到仓库。
+- 将项目文件夹压缩为 zip（例如 `uploads/input.zip`）并推送到仓库（路径相对仓库根，推荐放在已建的 `uploads/` 目录，仓库里有 `.gitkeep` 占位）。
 - 在 Actions 标签页触发 workflow，参数：
   - `archive_path`：压缩包相对路径，如 `input.zip` 或 `uploads/input.zip`。
   - `release_tag`：生成 Release 的标签，如 `auto-${{ github.run_number }}`。
