@@ -16,6 +16,7 @@ import argparse
 import shutil
 import sys
 import subprocess
+import os
 import hashlib
 import zipfile
 import tempfile
@@ -122,7 +123,7 @@ def convert_docx_to_pdf(docx_path: Path, out_pdf_path: Path, dry_run: bool = Fal
 
                     if not pdf_contains_chinese(out_pdf_path):
                         print("[WARN] 生成的 PDF 可能不包含中文（可能为乱码），尝试使用带中文环境的 LibreOffice 重试...")
-                        env = dict(**subprocess.os.environ)
+                        env = dict(os.environ)
                         env.update({"LANG": "zh_CN.UTF-8", "LC_ALL": "zh_CN.UTF-8"})
                         try:
                             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
