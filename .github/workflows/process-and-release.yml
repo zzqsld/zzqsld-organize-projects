@@ -1,0 +1,58 @@
+name: Process Projects
+
+on:
+  workflow_dispatch:
+    inputs:
+      archive_path:
+        description: 'Relative path to the project zip inside the repo (e.g. uploads/input.zip)'
+        required: true
+        default: 'input.zip'
+      release_tag:
+        description: 'Release tag to create (defaults to auto run-based tag)'
+        required: true
+        default: 'auto-${{ github.run_number }}'
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set date env
+        id: setdate
+        run: echo "date=$(date +%F)" >> $GITHUB_OUTPUT
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libreoffice
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare output directory
+        run: mkdir -p dist
+
+      - name: Run organizer
+        run: |
+          zip_name="${{ steps.setdate.outputs.date }}项目.zip"
+          python organize_projects.py --archive "${{ inputs.archive_path }}" --output-zip "dist/$zip_name"
+        shell: bash
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: Automated processing ${{ inputs.release_tag }}
+          files: dist/*项目.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

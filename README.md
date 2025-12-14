@@ -1,48 +1,38 @@
-# organize-projects
+# 项目整理与发布
 
-## 项目简介
-`organize-projects` 是一个用于识别和处理项目文件夹的Python工具。它能够自动转换和合并文件，简化项目管理流程。
+该项目提供一个脚本用于批量整理“项目文件夹”，并支持在本地或通过 GitHub Actions 生成压缩包发布。
 
-## 功能
-- 识别项目文件夹及其结构
-- 将 `.docx` 文件转换为 `.pdf`
-- 合并多个 PDF 文件
-- 自动处理文件重命名和移动
+## 关键行为（与旧版差异）
+- 识别“项目根”：只要目录下存在名为 `12` 的子文件夹，即视为项目根。
+- 优先使用 `12/开评标资料` 作为基准目录；若该目录下存在 `1..12` 全部子文件夹，则在其中的 `1` 目录生成临时输出，最终会合并回项目根下的 `1`。
+- 根级文件处理：将 `1.pdf`、`6.pdf`、`8.pdf` 移动到输出目录，其中 `6.pdf` 重命名为 `2.pdf`，`8.pdf` 重命名为 `5.pdf`。
+- `7.docx -> 4.pdf`：先尝试 `docx2pdf`，失败则回退使用 LibreOffice（`soffice`）。
+- 中文名排序：若安装 `pypinyin`，会按“第一个汉字的拼音首字母”进行 A→Z 排序；否则按字典序。
+- PNG -> PDF 处理已移除：如需合并图片请手动生成 PDF 放入输出目录。
+- 后处理仅做“输出目录中的 PDF 去重”：保留不带 `(n)` 的文件，删除重复 MD5 的带后缀文件；不再检查是否“齐全”。
 
-## 安装
-1. 克隆项目：
-   ```
-   git clone https://github.com/yourusername/organize-projects.git
-   cd organize-projects
-   ```
+## 本地运行
+- 安装依赖：`pip install -r requirements.txt`
+- 安装 LibreOffice 并确保 `soffice` 在 PATH 中；如已安装 `docx2pdf` 可优先使用（Windows/Mac 上体验更好）。
+- 运行示例：
+  - 扫描目录：`python organize_projects.py --root D:/path/to/projects`
+  - 处理压缩包：`python organize_projects.py --archive D:/path/to/input.zip --output-zip D:/path/to/dist/output.zip`
 
-2. 创建虚拟环境并激活：
-   ```
-   python -m venv venv
-   source venv/bin/activate  # 在 Windows 上使用 venv\Scripts\activate
-   ```
+## 常用参数
+- `--archive`：提供 zip 压缩包路径，脚本会自动解压并用解压后的目录作为 root。
+- `--root`：直接指定根目录（未压缩时使用）。
+- `--output-zip`：将所有项目的输出目录再次压缩，顶层文件夹为各“项目根目录名”，便于发布。
+- `--dry-run`：仅打印操作，不写磁盘。
+- `--no-recursive`：只检查第一层子目录。
+- `--non-strict`：非严格模式（尽量处理）。
 
-3. 安装依赖：
-   ```
-   pip install -r requirements.txt
-   ```
+## GitHub Actions（可选）
+如需在 CI 中批量处理并发布：
+- 将项目文件夹压缩为 zip（例如 `input.zip`）并推送到仓库。
+- 在 Actions 标签页触发 workflow，参数：
+  - `archive_path`：压缩包相对路径，如 `input.zip` 或 `uploads/input.zip`。
+  - `release_tag`：生成 Release 的标签，如 `auto-${{ github.run_number }}`。
+- workflow 将安装 LibreOffice 与依赖，执行脚本，并把每个项目根下的 `1` 目录内容按“项目根目录名”为顶层打包为 `dist/YYYY-MM-DD项目.zip`，并发布到 Release。
 
-## 使用
-运行主脚本以处理项目文件夹：
-```
-python src/organize_projects/organize_projects.py --root <项目根目录>
-```
-
-## 贡献
-欢迎任何形式的贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 以获取更多信息。
-
-## 许可证
-该项目采用 MIT 许可证，详细信息请查看 [LICENSE](LICENSE)。
-
-### 在 GitHub 上创建新项目的步骤
-1. 登录到你的 GitHub 账户。
-2. 点击右上角的 "+" 按钮，然后选择 "New repository"。
-3. 输入仓库名称（例如 `organize-projects`）。
-4. 选择仓库的可见性（Public 或 Private）。
-5. 点击 "Create repository" 按钮。
-6. 按照页面上的说明将本地代码推送到新创建的 GitHub 仓库。
+## Release 内容
+- `YYYY-MM-DD项目.zip`：包含每个项目根目录名作为顶层文件夹，其下为该项目 `1` 目录的所有生成 PDF（已做重复去重）。
