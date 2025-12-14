@@ -40,6 +40,10 @@ jobs:
 
       - name: Run organizer
         run: |
+          if [ -z "${{ secrets.WEBDAV_URL }}" ]; then
+            echo "WEBDAV_URL is empty. Please set environment secrets WEBDAV_URL/WEBDAV_USERNAME/WEBDAV_PASSWORD." >&2
+            exit 1
+          fi
           DELETE_FLAG=""
           if [ "${{ inputs.delete_source }}" = "true" ]; then
             DELETE_FLAG="--webdav-delete-source"
