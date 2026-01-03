@@ -50,8 +50,9 @@ REQUIRED_SUBDIR = "12"
 KAIPING_DIR_NAME = "开评标资料"  # look under 12\开评标资料 for 1..12
 PROCESSED_SUFFIX = "_已处理"
 
-MOVE_FILES_TO_OUTPUT = ["1.pdf", "6.pdf", "8.pdf"]
-DOCX_TO_PDF = {"7.docx": "4.pdf"}  # convert 7.docx -> 4.pdf (rename)
+MOVE_FILES_TO_OUTPUT = ["1.pdf", "6.pdf", "8.pdf", "3.pdf", "2.pdf"]
+DOCX_TO_PDF = {"7.docx": "4竞标采购邀请书.pdf"}  # convert 7.docx -> 4...pdf (rename)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
 
 # ----------------- 工具函数 -----------------
@@ -86,6 +87,19 @@ def move_file(src: Path, dst: Path, dry_run: bool = False):
     t = unique_path(dst)
     shutil.move(str(src), str(t))
     print(f"[OK] Moved: {src} -> {t}")
+
+
+def copy_file(src: Path, dst: Path, dry_run: bool = False):
+    if not src.exists():
+        print(f"[WARN] 源不存在，无法复制: {src}")
+        return
+    if dry_run:
+        print(f"[DRY] Copy: {src} -> {dst}")
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    t = unique_path(dst)
+    shutil.copy2(str(src), str(t))
+    print(f"[OK] Copied: {src} -> {t}")
 
 
 def convert_docx_to_pdf(docx_path: Path, out_pdf_path: Path, dry_run: bool = False) -> bool:
@@ -212,53 +226,72 @@ def calculate_md5(file_path: Path) -> str:
 
 def remove_duplicate_files(output_dir: Path, dry_run: bool = False):
     """
-    仅对输出目录中的 PDF 做去重：
+    对输出目录中的 PDF 和图片做去重：
     - 若 MD5 相同，仅保留不带 (1) 等后缀者
-    - 额外：若存在 “X.pdf” 和 “X (n).pdf”，无论 MD5 是否一致，一律删除 “X (n).pdf”
+    - 额外：若存在 “X.ext” 和 “X (n).ext”，无论 MD5 是否一致，一律删除 “X (n).ext”
     """
     if not output_dir.exists():
         return
     
     print(f"\n[INFO] 检查重复文件: {output_dir}")
+    
+    # 目标扩展名：PDF + 图片
+    target_exts = {".pdf"} | IMAGE_EXTENSIONS
+    
     md5_dict: Dict[str, List[Path]] = {}
-    pdf_files = list(output_dir.glob("*.pdf"))
-    for pdf_file in pdf_files:
-        md5 = calculate_md5(pdf_file)
+    # 扫描所有目标文件
+    all_files = [
+        p for p in output_dir.iterdir() 
+        if p.is_file() and p.suffix.lower() in target_exts
+    ]
+
+    for f in all_files:
+        md5 = calculate_md5(f)
         if md5:
-            md5_dict.setdefault(md5, []).append(pdf_file)
+            md5_dict.setdefault(md5, []).append(f)
     
     deleted_count = 0
     for md5, files in md5_dict.items():
         if len(files) > 1:
             files_sorted = sorted(files, key=lambda f: (
                 " (" in f.stem,
+                len(f.name),
                 f.stem.lower()
             ))
             keep_file = files_sorted[0]
             for dup in files_sorted[1:]:
                 if dry_run:
-                    print(f"  [DRY] 删除重复: {dup.name} (保留 {keep_file.name})")
+                    print(f"  [DRY] 删除重复(MD5相同): {dup.name} (保留 {keep_file.name})")
                 else:
                     try:
                         dup.unlink()
-                        print(f"  [OK] 已删除重复: {dup.name}")
+                        print(f"  [OK] 已删除重复(MD5相同): {dup.name}")
                         deleted_count += 1
                     except Exception as e:
                         print(f"  [ERROR] 删除失败 {dup.name}: {e}")
     
-    for pdf_file in output_dir.glob("* (*).pdf"):
-        base_name = pdf_file.stem.rsplit(' (', 1)[0] + '.pdf'
-        base_file = output_dir / base_name
-        if base_file.exists():
-            if dry_run:
-                print(f"  [DRY] 删除带后缀文件: {pdf_file.name} (保留 {base_name})")
-            else:
-                try:
-                    pdf_file.unlink()
-                    print(f"  [OK] 已删除带后缀文件: {pdf_file.name}")
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"  [ERROR] 删除失败 {pdf_file.name}: {e}")
+    # 再次扫描以处理文件名模式 (X.ext vs X (n).ext)
+    for f in output_dir.iterdir():
+        if not f.is_file() or f.suffix.lower() not in target_exts:
+            continue
+            
+        if " (" in f.stem and f.stem.endswith(")"):
+            # 尝试构造原始文件名
+            try:
+                base_stem = f.stem.rsplit(' (', 1)[0]
+                base_file = output_dir / (base_stem + f.suffix)
+                if base_file.exists():
+                    if dry_run:
+                        print(f"  [DRY] 删除带后缀文件: {f.name} (保留 {base_file.name})")
+                    else:
+                        try:
+                            f.unlink()
+                            print(f"  [OK] 已删除带后缀文件: {f.name}")
+                            deleted_count += 1
+                        except Exception as e:
+                            print(f"  [ERROR] 删除失败 {f.name}: {e}")
+            except Exception:
+                pass
     
     if deleted_count > 0:
         print(f"[INFO] 共删除 {deleted_count} 个重复文件")
@@ -501,26 +534,32 @@ def get_sub_dir(base_dir: Path, n: int) -> Path:
 # ----------------- 处理单个项目 -----------------
 
 
+def normalize_project_root(proj: Path) -> Path:
+    """
+    将可能的子目录路径规范化为项目根目录。
+    例如: .../12/开评标资料 -> ...
+    """
+    if proj.name == KAIPING_DIR_NAME:
+        if proj.parent and proj.parent.name == REQUIRED_SUBDIR and proj.parent.parent:
+            return proj.parent.parent
+        return proj.parent or proj
+    elif proj.name == REQUIRED_SUBDIR:
+        return proj.parent or proj
+    return proj
+
+
 def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
     """
     proj 应该是项目根目录（即包含名为 REQUIRED_SUBDIR 的子文件夹）
     优先使用 proj/12/开评标资料 作为 base12_dir 查找 1..12。
     """
-    print(f"\n--- 处理项目: {proj} ---")
-    
-    # 如果传入的是 12\开评标资料 路径，规范化为项目根
-    proj_root = proj
-    if proj.name == KAIPING_DIR_NAME:
-        if proj.parent and proj.parent.name == REQUIRED_SUBDIR and proj.parent.parent:
-            proj_root = proj.parent.parent
-        else:
-            proj_root = proj.parent or proj
-    elif proj.name == REQUIRED_SUBDIR:
-        proj_root = proj.parent or proj
-    
+    # 规范化项目根目录
+    proj_root = normalize_project_root(proj)
     if proj_root != proj:
         print(f"[INFO] 已将路径规范为项目根: {proj_root}")
     proj = proj_root
+
+    print(f"\n--- 处理项目: {proj} ---")
     
     # 确定 base12_dir：优先 proj/12/开评标资料，其次 proj/12
     base12_candidate = proj / REQUIRED_SUBDIR / KAIPING_DIR_NAME
@@ -557,19 +596,34 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
     if not dry_run:
         tmpdir.mkdir(parents=True, exist_ok=True)
 
-    # 根目录处理：移动并按需求改名（6->2.pdf, 8->5.pdf, 1.pdf 保持）
+    # 根目录处理：移动并按需求改名
     for name in MOVE_FILES_TO_OUTPUT:
         src = proj / name
         if not src.exists():
             print(f"[WARN] 未找到待移动文件: {src}")
             continue
         if name == "6.pdf":
-            dst = output_dir / "2.pdf"
+            dst = output_dir / "2招标代理委托合同.pdf"
         elif name == "8.pdf":
-            dst = output_dir / "5.pdf"
+            dst = output_dir / "5非招标采购文件.pdf"
+        elif name == "1.pdf":
+            dst = output_dir / "1项目批复文件.pdf"
+        elif name == "3.pdf":
+            dst = output_dir / "3项目管理机构（项目经理）任命书.pdf"
+        elif name == "2.pdf":
+            dst = output_dir / "6采购文件澄清（答疑）纪要.pdf"
         else:
             dst = output_dir / name
         move_file(src, dst, dry_run=dry_run)
+
+    # 复制根目录下的图片文件
+    print("[INFO] 扫描并复制根目录下的图片文件...")
+    for item in proj.iterdir():
+        if item.is_file() and item.suffix.lower() in IMAGE_EXTENSIONS:
+            # 避免复制输出目录中的文件（如果输出目录在根目录下）
+            if item.parent == output_dir:
+                continue
+            copy_file(item, output_dir / item.name, dry_run=dry_run)
 
     # 7.docx -> 4.pdf
     docx_name = "7.docx"
@@ -597,6 +651,15 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
 
     # base12_dir 下按编号文件夹生成目标 PDF
     if base12_dir:
+        # 复制 base12_dir 下所有子文件夹中的图片文件
+        print(f"[INFO] 扫描并复制 {base12_dir} 下的图片文件...")
+        for item in base12_dir.rglob("*"):
+            if item.is_file() and item.suffix.lower() in IMAGE_EXTENSIONS:
+                # 避免复制输出目录中的文件
+                if output_dir in item.parents or item.parent == output_dir:
+                    continue
+                copy_file(item, output_dir / item.name, dry_run=dry_run)
+
         def sub_dir(n: int) -> Path:
             return get_sub_dir(base12_dir, n)
 
@@ -605,7 +668,7 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
         if s1_dir:
             s1 = s1_dir / "评标委员会成员签到表.pdf"
             if s1.exists():
-                dst = output_dir / ("7" + s1.name)
+                dst = output_dir / "7评标委员会成员签到表.pdf"
                 move_file(s1, dst, dry_run=dry_run)
             else:
                 print(f"[WARN] 未在 {s1_dir} 找到 '评标委员会成员签到表.pdf'。")
@@ -617,7 +680,7 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
         if s2_dir:
             s2 = s2_dir / "评标委员会声明书.pdf"
             if s2.exists():
-                dst = output_dir / ("8" + s2.name)
+                dst = output_dir / "8评标委员会声明书.pdf"
                 move_file(s2, dst, dry_run=dry_run)
 
         # 3号 -> 9.pdf（三位姓名的 PDF 按拼音首字母排序后依次放前，最后追加“初步评审标准及记录表.pdf”）
@@ -635,17 +698,18 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
                 prelim = f3 / "初步评审标准及记录表.pdf"
                 if len(pdfs) == 3 and prelim.exists():
                     merged = [*pdfs, prelim]  # 先三份姓名 PDF，最后追加评审标准
-                    out_tmp = tmpdir / "9.pdf"
+                    target_name = "9初步评审标准及记录表.pdf"
+                    out_tmp = tmpdir / target_name
                     ok = merge_pdfs(merged, out_tmp, dry_run=dry_run)
                     if ok:
-                        dst = output_dir / "9.pdf"
+                        dst = output_dir / target_name
                         if dry_run:
                             print(f"[DRY] Would move {out_tmp} -> {dst}")
                         else:
                             if out_tmp.exists():
                                 move_file(out_tmp, dst, dry_run=False)
                 else:
-                    print(f"[WARN] {f3} 无法满足 9.pdf 的合并条件。")
+                    print(f"[WARN] {f3} 无法满足 9初步评审标准及记录表.pdf 的合并条件。")
 
         # 4号 -> 10.pdf（同理，最后追加“初步评审标准及记录表（其他情况）.pdf”）
         f4 = sub_dir(4)
@@ -662,64 +726,166 @@ def process_project(proj: Path, dry_run: bool = False, strict: bool = True):
                 prelim_other = f4 / "初步评审标准及记录表（其他情况）.pdf"
                 if len(pdfs) == 3 and prelim_other.exists():
                     merged = [*pdfs, prelim_other]  # 不再与姓名文件一起排序
-                    out_tmp = tmpdir / "10.pdf"
+                    target_name = "10初步评审标准及记录表（其他情况）.pdf"
+                    out_tmp = tmpdir / target_name
                     ok = merge_pdfs(merged, out_tmp, dry_run=dry_run)
                     if ok:
-                        dst = output_dir / "10.pdf"
+                        dst = output_dir / target_name
                         if dry_run:
                             print(f"[DRY] Would move {out_tmp} -> {dst}")
                         else:
                             if out_tmp.exists():
                                 move_file(out_tmp, dst, dry_run=False)
                 else:
-                    print(f"[WARN] {f4} 无法满足 10.pdf 的合并条件。")
+                    print(f"[WARN] {f4} 无法满足 10初步评审标准及记录表（其他情况）.pdf 的合并条件。")
 
         # 5号 -> 11未通过初步评审等情况汇总表.pdf
         s5_dir = sub_dir(5)
         if s5_dir:
             s5 = s5_dir / "未通过初步评审等情况汇总表.pdf"
             if s5.exists():
-                dst = output_dir / ("11" + s5.name)
+                dst = output_dir / "11未通过初步评审等情况汇总表.pdf"
                 move_file(s5, dst, dry_run=dry_run)
 
-        # 6/7/8 -> 12/13/14
-        for idx, outname in ((6, "12.pdf"), (7, "13.pdf"), (8, "14.pdf")):
+        # ---------------------------------------------------------
+        # 定义通用函数：合并专家 PDF
+        # ---------------------------------------------------------
+        def process_merge_experts(src_dir: Path, target_name: str) -> bool:
+            if not src_dir or not src_dir.exists():
+                print(f"[WARN] 目录不存在，无法执行专家合并: {src_dir}")
+                return False
+
+            chinese_dirs = [d for d in src_dir.iterdir() if d.is_dir() and has_chinese(d.name)]
+            if not chinese_dirs:
+                print(f"[WARN] 在 {src_dir.name} 下未找到专家文件夹（中文命名文件夹），无法生成 {target_name}")
+                return False
+
+            # 按拼音排序
+            sorted_dirs = sort_dirs_by_pinyin(chinese_dirs)
+            
+            # 取前 3 个（不足 3 个则取全部）
+            targets = sorted_dirs[:3]
+            pdfs_to_merge = []
+            
+            print(f"[INFO] 在 {src_dir.name} 下找到 {len(sorted_dirs)} 个专家文件夹，将合并前 {len(targets)} 个: {[d.name for d in targets]}")
+
+            for d in targets:
+                # 取该专家文件夹下的第一个 PDF
+                pdf_list = [fp for fp in d.iterdir() if fp.is_file() and fp.suffix.lower() == ".pdf"]
+                if pdf_list:
+                    pdfs_to_merge.append(pdf_list[0])
+                else:
+                    print(f"[WARN] 专家文件夹 {d.name} 中未找到 PDF 文件")
+
+            if not pdfs_to_merge:
+                print(f"[WARN] 未收集到任何 PDF 文件，跳过生成 {target_name}")
+                return False
+
+            if len(pdfs_to_merge) < 3:
+                print(f"[INFO] {target_name} 源文件不足 3 个 (仅 {len(pdfs_to_merge)} 个)，直接合并。")
+
+            out_tmp = tmpdir / target_name
+            ok = merge_pdfs(pdfs_to_merge, out_tmp, dry_run=dry_run)
+            if ok:
+                dst = output_dir / target_name
+                if dry_run:
+                    print(f"[DRY] Would move {out_tmp} -> {dst}")
+                else:
+                    if out_tmp.exists():
+                        move_file(out_tmp, dst, dry_run=False)
+                        print(f"[OK] 已通过合并专家文件生成: {dst.name}")
+                        return True
+            return False
+
+        # ---------------------------------------------------------
+        # 6/7/8 -> 12/13/14 (始终使用合并专家逻辑)
+        # ---------------------------------------------------------
+        generated_status = {}
+        target_names_map = {
+            6: "12综合部分评审标准及计分表.pdf",
+            7: "13技术部分评审标准及计分表.pdf",
+            8: "14报价部分评审标准及计分表.pdf"
+        }
+        for idx, outname in target_names_map.items():
             f = sub_dir(idx)
             if f:
-                chinese_dirs_n = [d for d in f.iterdir() if d.is_dir() and has_chinese(d.name)]
-                chinese_dirs_n_sorted = sort_dirs_by_pinyin(chinese_dirs_n)
-                if len(chinese_dirs_n_sorted) >= 3:
-                    pdfs = []
-                    for d in chinese_dirs_n_sorted[:3]:
-                        pdf_list = [fp for fp in d.iterdir() if fp.is_file() and fp.suffix.lower() == ".pdf"]
-                        if pdf_list:
-                            pdfs.append(pdf_list[0])
-                    if len(pdfs) == 3:
-                        merged = pdfs  # 已按拼音首字母排序
-                        out_tmp = tmpdir / outname
-                        ok = merge_pdfs(merged, out_tmp, dry_run=dry_run)
-                        if ok:
-                            dst = output_dir / outname
-                            if dry_run:
-                                print(f"[DRY] Would move {out_tmp} -> {dst}")
-                            else:
-                                if out_tmp.exists():
-                                    move_file(out_tmp, dst, dry_run=False)
+                generated_status[outname] = process_merge_experts(f, outname)
+            else:
+                generated_status[outname] = False
 
+        # ---------------------------------------------------------
         # 9->15, 10->16, 11->17, 12->18
+        # ---------------------------------------------------------
         mapping_single = {
-            9: ("投标报价得分汇总表.pdf", "15"),
-            10: ("评分汇总及得分记录表.pdf", "16"),
-            11: ("承包商排序表.pdf", "17"),
-            12: ("评审报告.pdf", "18")
+            9:  {"keyword": "投标报价得分汇总表", "target": "15投标报价得分汇总表.pdf", "allow_merge": False},
+            10: {"keyword": "评分汇总及得分记录表", "target": "16评分汇总及得分记录表.pdf", "allow_merge": True},
+            11: {"keyword": "承包商排序表", "target": "17承包商排序表.pdf", "allow_merge": False},
+            12: {"keyword": "评审报告", "target": "18评审报告.pdf", "allow_merge": False}
         }
-        for idx, (fname, prefix) in mapping_single.items():
-            srcf_dir = get_sub_dir(base12_dir, idx)
+
+        is_16_from_file = False
+        target_14_name = "14报价部分评审标准及计分表.pdf"
+
+        for idx, config in mapping_single.items():
+            keyword = config["keyword"]
+            target_name = config["target"]
+            allow_merge = config["allow_merge"]
+            
+            srcf_dir = get_sub_dir(base12_dir, idx) if base12_dir else None
+            found_file = None
+            
+            # 1. 尝试在对应文件夹查找
             if srcf_dir:
-                srcf = srcf_dir / fname
-                if srcf.exists():
-                    dst = output_dir / (prefix + srcf.name)
-                    move_file(srcf, dst, dry_run=dry_run)
+                candidates = [
+                    p for p in srcf_dir.iterdir() 
+                    if p.is_file() and p.suffix.lower() == ".pdf" and keyword in p.name
+                ]
+                if candidates:
+                    found_file = candidates[0]
+            
+            # 2. 如果没找到，尝试在 base12_dir 全局查找
+            if not found_file and base12_dir:
+                 all_candidates = [
+                    p for p in base12_dir.rglob("*.pdf")
+                    if keyword in p.name and ".organize_tmp" not in str(p)
+                 ]
+                 # 排除 output_dir
+                 all_candidates = [p for p in all_candidates if output_dir.resolve() not in p.parents]
+                 
+                 if all_candidates:
+                     found_file = all_candidates[0]
+                     print(f"[INFO] 在全局搜索中找到文件 '{found_file.name}' (位于 {found_file.parent.name})")
+
+            if found_file:
+                # 使用固定目标文件名
+                dst = output_dir / target_name
+                print(f"[INFO] 找到文件 '{found_file.name}' -> 重命名移动为 {target_name}")
+                move_file(found_file, dst, dry_run=dry_run)
+                if idx == 10:
+                    is_16_from_file = True
+            else:
+                print(f"[WARN] 未找到包含 '{keyword}' 的 PDF 文件。")
+                
+                # 3. 如果允许合并专家（如 10号文件夹），且文件夹存在，则尝试合并
+                if allow_merge and srcf_dir:
+                    # 特殊逻辑：如果 14... 尚未生成，且当前是文件夹 10
+                    # 则优先将文件夹 10 的专家用于生成 14...，而不是 16...
+                    if idx == 10 and not generated_status.get(target_14_name):
+                        print(f"[INFO] 检测到 {target_14_name} 缺失，且需对文件夹 10 执行专家合并。优先生成该文件 ...")
+                        if process_merge_experts(srcf_dir, target_14_name):
+                            generated_status[target_14_name] = True
+                            continue
+
+                    print(f"[INFO] 尝试对 {srcf_dir.name} 执行专家合并逻辑以生成 {target_name} ...")
+                    process_merge_experts(srcf_dir, target_name)
+
+        # 特殊补救：如果 14... 未生成，但 16... 已由文件生成，且文件夹 10 (对应 16) 下有专家文件夹
+        # 则尝试用文件夹 10 的专家生成 14...
+        if not generated_status.get(target_14_name) and is_16_from_file:
+            dir_10 = sub_dir(10)
+            if dir_10:
+                print(f"[INFO] 检测到 {target_14_name} 缺失且 16... 已由文件生成，尝试使用文件夹 10 的专家生成 14... ...")
+                process_merge_experts(dir_10, target_14_name)
 
     # 清理临时目录
     if not dry_run:
@@ -800,21 +966,31 @@ def find_and_process(root: Path, dry_run: bool = False, recursive: bool = True, 
     if not project_roots:
         print("[INFO] 未找到任何符合条件的项目目录（没有发现名为 '12' 的子文件夹）。")
         return []
-    print(f"[INFO] 找到 {len(project_roots)} 个项目根，准备逐个处理：")
+    
+    # 规范化并去重
+    unique_roots = set()
+    final_roots = []
     for p in project_roots:
+        norm = normalize_project_root(p)
+        if norm not in unique_roots:
+            unique_roots.add(norm)
+            final_roots.append(norm)
+            
+    print(f"[INFO] 找到 {len(final_roots)} 个唯一项目根 (原始发现 {len(project_roots)} 个)，准备逐个处理：")
+    for p in final_roots:
         print(f"  - {p}")
     
     # 收集所有项目的输出目录
     project_outputs = []
-    for proj in project_roots:
+    for proj in final_roots:
         result = process_project(proj, dry_run=dry_run, strict=strict)
         if result:
             project_outputs.append(result)
     
-    # 后处理：仅删除输出目录中的重复 PDF（不再检查是否齐全）
+    # 后处理：删除输出目录中的重复文件 (PDF/图片)
     if not dry_run:
         print("\n" + "="*60)
-        print("开始后处理：仅删除输出目录中的重复 PDF")
+        print("开始后处理：删除输出目录中的重复文件 (PDF/图片)")
         print("="*60)
         
         for proj, output_dir in project_outputs:
