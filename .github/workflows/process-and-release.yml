@@ -59,5 +59,8 @@ jobs:
             --webdav-url "${{ secrets.WEBDAV_URL }}" \
             --webdav-username "${{ secrets.WEBDAV_USERNAME }}" \
             --webdav-password "${{ secrets.WEBDAV_PASSWORD }}" \
-            $DELETE_FLAG
+            $DELETE_FLAG || { echo "Script failed"; exit 1; }
+
+          echo "=== Output Directory Listing ==="
+          ls -R dist || echo "dist directory not found or empty"
         shell: bash

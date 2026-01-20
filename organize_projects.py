@@ -23,8 +23,38 @@ import tempfile
 from typing import List, Set, Dict, Optional
 import xml.etree.ElementTree as ET
 from urllib.parse import urljoin, quote, unquote
+import datetime
+import io
 
 import requests
+
+# optional imports
+try:
+    import docx2pdf
+    _HAS_DOCX2PDF = True
+except Exception:
+    _HAS_DOCX2PDF = False
+
+try:
+    from pypdf import PdfWriter
+    _HAS_PYPDF = True
+except Exception:
+    _HAS_PYPDF = False
+
+# pypinyin for sorting by pinyin initial
+try:
+    from pypinyin import lazy_pinyin, Style
+    _HAS_PYPINYIN = True
+except Exception:
+    _HAS_PYPINYIN = False
+
+# GUI imports
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox, scrolledtext
+    _HAS_TKINTER = True
+except Exception:
+    _HAS_TKINTER = False
 
 # optional imports
 try:
@@ -1063,7 +1093,15 @@ def main():
     parser.add_argument("--webdav-username", help="WebDAV 用户名")
     parser.add_argument("--webdav-password", help="WebDAV 密码")
     parser.add_argument("--webdav-delete-source", action="store_true", help="上传处理结果后删除远端原始压缩包")
+    parser.add_argument("--gui", action="store_true", help="启动图形用户界面")
     args = parser.parse_args()
+
+    if args.gui:
+        if not _HAS_TKINTER:
+            print("[ERROR] Tkinter 不可用，无法启动 GUI。请安装 Tkinter 或使用命令行模式。")
+            sys.exit(1)
+        start_gui()
+        return
 
     if not args.root and not args.archive and not args.webdav_url:
         parser.error("必须指定 --root、--archive 或 --webdav-url 之一。")
@@ -1127,6 +1165,120 @@ def main():
         temp_dir.cleanup()
 
     print("\n全部完成。")
+
+
+def start_gui():
+    """启动图形用户界面"""
+    root = tk.Tk()
+    root.title("项目整理工具")
+    root.geometry("600x500")
+
+    # 确保窗口显示在前面
+    root.lift()
+    root.attributes('-topmost', True)
+    root.after_idle(root.attributes, '-topmost', False)
+
+    # 变量
+    input_dir_var = tk.StringVar()
+    output_zip_var = tk.StringVar()
+
+    # 日志窗口
+    log_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, height=15)
+    log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    # 框架
+    frame = tk.Frame(root)
+    frame.pack(pady=10)
+
+    # 输入目录选择
+    tk.Label(frame, text="项目文件夹:").grid(row=0, column=0, sticky="w")
+    tk.Entry(frame, textvariable=input_dir_var, width=40).grid(row=0, column=1)
+    tk.Button(frame, text="选择文件夹", command=lambda: select_input_dir(input_dir_var)).grid(row=0, column=2)
+
+    # 输出ZIP选择
+    tk.Label(frame, text="输出ZIP文件:").grid(row=1, column=0, sticky="w")
+    tk.Entry(frame, textvariable=output_zip_var, width=40).grid(row=1, column=1)
+    tk.Button(frame, text="选择保存位置", command=lambda: select_output_zip(output_zip_var)).grid(row=1, column=2)
+
+    # 运行按钮
+    tk.Button(frame, text="运行整理", command=lambda: run_process(input_dir_var.get(), output_zip_var.get(), log_text)).grid(row=2, column=1, pady=10)
+
+    root.mainloop()
+
+
+def select_input_dir(var):
+    dir_path = filedialog.askdirectory(title="选择项目文件夹")
+    if dir_path:
+        var.set(dir_path)
+
+
+def select_output_zip(var):
+    file_path = filedialog.asksaveasfilename(
+        title="选择输出ZIP文件保存位置",
+        defaultextension=".zip",
+        filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")]
+    )
+    if file_path:
+        # 自动生成文件名：当天日期 + 项目.zip
+        today = datetime.date.today()
+        date_str = f"{today.month}月{today.day}号项目.zip"
+        output_dir = Path(file_path).parent
+        auto_name = output_dir / date_str
+        var.set(str(auto_name))
+
+
+def run_process(input_dir, output_zip, log_text):
+    if not input_dir:
+        messagebox.showerror("错误", "请选择项目文件夹")
+        return
+    if not output_zip:
+        messagebox.showerror("错误", "请选择输出ZIP文件位置")
+        return
+
+    # 清空日志
+    log_text.delete(1.0, tk.END)
+
+    # 重定向输出
+    old_stdout = sys.stdout
+    sys.stdout = LogRedirector(log_text)
+
+    try:
+        root_path = Path(input_dir)
+        if not root_path.exists() or not root_path.is_dir():
+            print(f"错误：指定的目录不存在或不是文件夹: {root_path}")
+            return
+
+        if not _HAS_PYPINYIN:
+            print("[WARN] 未检测到 pypinyin，中文名将按字典序排序。如需按拼音排序请安装：pip install pypinyin")
+
+        print(f"开始扫描: {root_path}")
+        outputs = find_and_process(root_path, dry_run=False, recursive=True, strict=True)
+
+        if outputs:
+            output_dirs = [pair[1] for pair in outputs if pair and len(pair) == 2]
+            out_zip_path = Path(output_zip)
+            zip_outputs(output_dirs, out_zip_path, dry_run=False)
+            print(f"\n输出已保存到: {out_zip_path}")
+
+        print("\n全部完成。")
+
+    except Exception as e:
+        print(f"错误: {e}")
+    finally:
+        sys.stdout = old_stdout
+
+
+class LogRedirector:
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+
+    def write(self, message):
+        self.text_widget.insert(tk.END, message)
+        self.text_widget.see(tk.END)
+        self.text_widget.update_idletasks()
+
+    def flush(self):
+        pass
 
 
 if __name__ == "__main__":
