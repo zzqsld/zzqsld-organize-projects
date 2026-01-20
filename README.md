@@ -18,6 +18,15 @@
 - 运行示例：
   - 扫描目录：`python organize_projects.py --root D:/path/to/projects`
   - 处理压缩包：`python organize_projects.py --archive D:/path/to/input.zip --output-zip D:/path/to/dist/output.zip`
+  - **图形界面**：`python organize_projects.py --gui`（需要 Tkinter 支持）
+
+### 图形界面模式
+- 启动：`python organize_projects.py --gui`
+- 功能：
+  - 选择项目文件夹：点击"选择文件夹"按钮选择要处理的根目录
+  - 选择输出位置：点击"选择保存位置"按钮，选择ZIP文件保存位置，文件名会自动设置为当天日期格式（如"1月20号项目.zip"）
+  - 运行整理：点击"运行整理"按钮开始处理，处理日志会实时显示在下方的日志窗口
+  - 日志显示：所有处理信息、警告和错误都会在滚动文本框中显示，便于监控处理进度
 
 ## WebDAV 自动处理（本地或 GitHub Actions）
 - 场景：GitHub 不能上传超过 25MB 的大压缩包时，可把 zip 放到支持 WebDAV 的网盘目录。
